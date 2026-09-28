@@ -1,5 +1,6 @@
 import timm
 import torch
+from torch import nn
 from timm.models.vision_transformer import VisionTransformer
 
 # Wrappermodel to execute timm models
@@ -24,7 +25,7 @@ class wrappermodel(torch.nn.Module):
     def get_fc(self):
         fc = self.basemodel.get_classifier()
         return fc.weight.cpu().detach().numpy(), fc.bias.cpu().detach().numpy()
-
+    
     def get_fc_layer(self):
         return self.basemodel.get_classifier()
     

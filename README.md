@@ -1,144 +1,136 @@
-# [Mahalanobis++: Improving OOD Detection via Feature Normalization](https://arxiv.org/abs/2505.18032)
-
-Maximilian Müller, Matthias Hein
-
-**University of Tübingen**  
-**Tübingen AI Center**
+# Out-of-Distribution Detection with Anisotropic Cosine Similarity
 
 
-Paper: [https://arxiv.org/abs/2505.18032](https://arxiv.org/abs/2505.18032)  
+## Overview
 
-## Paper abstract
+While cosine similarity is widely used in OOD detection, its isotropic assumption leads to suboptimal detection boundaries in anisotropic embedding spaces. We propose **ANCO** (Anisotropic Cosine similarity), which rescales angular deviations based on direction-dependent in-distribution dispersion estimated via the Fréchet mean and tangent-space covariance on the unit hypersphere.
 
-Detecting out-of-distribution (OOD) examples is an important task for deploying reliable machine learning models in safety-critial applications. 
-While post-hoc methods based on the Mahalanobis distance applied to pre-logit features are among the most effective for ImageNet-scale OOD detection, their performance varies significantly across models. We connect this inconsistency to strong variations in feature norms, indicating severe violations of the Gaussian assumption underlying the Mahalanobis distance estimation. We show that simple $\ell_2$-normalization of the features mitigates this problem effectively, aligning better with the premise of normally distributed data with shared covariance matrix. Extensive experiments on 44 models across diverse architectures and pretraining schemes show that $\ell_2$-normalization improves the conventional Mahalanobis distance-based approaches significantly and consistently, and outperforms other recently proposed OOD detection methods.
+We also introduce **ANG**, which applies ANCO to [NNGuide](https://github.com/roomo7time/nnguide) using 1,000 class means.
 
+### Key idea
 
-<table>
-  <tr>
-    <td>
-      <img src="assets/exp-obs-fnorm-swinv2_base_window12to24_192to384.ms_in22k_ft_in1k(1).png" alt="Left Image" height="300"/>
-    </td>
-    <td>
-      <img src="assets/fnorm-smaha-swinv2_base_window12to24_192to384.ms_in22k_ft_in1k.png" alt="Left Image" height="300"/>
-    </td>
-  </tr>
-  <tr>
-    <td colspan="2" style="text-align: center; padding-top: 10px; max-width: 600px;">
-      <b>Left: The Gaussian assumption may be severely violated.</b> We simulate how the feature norms per class would be distributed if they were sampled from Gaussians with the means and covariance matrix used for the Mahalanobis distance estimation. The feature norm distribution observed in practice differs strongly, as both the average norms across classes and the norms within each class vary much stronger than expected.<br><br>
-      <b>Right: Normalization improves dependence of OOD score on feature norm.</b> For non-normalized features, the smaller the feature norm, the smaller the Mahalanobis OOD score, irrespective of whether a sample is ID or not. OOD samples with small feature norms are systematically classified as ID.  After normalization, OOD samples with small feature norms can be detected, and OOD detection is significantly improved.
-    </td>
-  </tr>
-</table>
+Given a test feature $\mathbf{x}$ and class prototype $\boldsymbol{\mu}_c$ (Fréchet mean on $\mathbb{S}^{D-1}$), ANCO computes:
 
-## **Using this repository**:
-````
-# install packages
-conda env create -f ninco_maha.yml
-conda activate NINCO_maha
+```
+θ'_ci = min(θ_ci · (σ̄ / σ(u_ci)), π)
+s_c(x) = cos(θ'_ci)
+S(x)   = max_c s_c(x)
+```
+
+where `σ(u_ci)` is the direction-dependent standard deviation from the tangent-space covariance, and `σ̄` is the global average standard deviation.
+
+## This repository
+
+This codebase extends [Mahalanobis++](https://github.com/MMaximilianMueller/mahalanobis-plus-plus) (Müller & Hein, ICML 2025) with ANCO and ANG. The evaluation framework, data loading, and baselines are inherited from that repository, which in turn builds on [NINCO](https://github.com/j-cb/NINCO) and [OpenOOD](https://github.com/Jingkang50/OpenOOD).
+
+Key additions:
+- `NINCO/detection_methods.py`: `evaluate_ANCO()`, `evaluate_ANCOGuide()`
+- `OpenOOD/eval_cifar.py`: ANCO and ANG evaluation for CIFAR-100 benchmarks
+
+## Setup
+
+```bash
+conda env create -f anco.yml
+conda activate anco
 pip install libmr==0.1.9
+```
 
-# go to NINCO folder and download NINCO data
+### Download data
+
+```bash
+# NINCO datasets
 cd NINCO
 wget https://zenodo.org/record/8013288/files/NINCO_all.tar.gz?download=1 -O NINCO_all.tar.gz
 tar -xvzf NINCO_all.tar.gz
 
-# go to OpenOOD folder and download data
+# OpenOOD datasets and checkpoints
 cd ../OpenOOD
 python ./scripts/download/download.py --contents 'datasets' 'checkpoints' --datasets 'ood_v1.5' --checkpoints 'ood_v1.5' --save_dir './data' './results' --dataset_mode 'benchmark'
-````
-
-Then please edit `NINCO/data/paths_config.py` to set `ninco_folder` to the folder where the downloaded NINCO datasets have been extracted (containing the folders `NINCO_OOD_classes`,  `NINCO_OOD_unit_tests` and  `NINCO_popular_datasets_subsamples`).
-Also, set `repo_path` to the absolute path of the NINCO repository, and specify the correct ImageNet path.
-
-## Method
-The usual Mahalanobis distance for OOD detection, but with normalized features:
-```python
-import numpy as np
-from sklearn.covariance import EmpiricalCovariance
-
-def evaluate_Mahalanobis_norm(feature_id_train, feature_id_val, feature_ood, train_labels):
-    """
-    feature_id_train (numpy array): ID train samples, (n_train x d).
-    feature_id_val (numpy array): ID val samples, (n_val x d).
-    feature_ood (numpy array): OOD samples (n_ood x d)
-    train_labels (numpy array): The labels of the in-distribution training samples.
-    Returns:
-    tuple: The Mahalanobis scores for in-distribution validation and out-of-distribution samples.
-    """
-    # normalize features
-    feature_id_val = feature_id_val/np.linalg.norm(feature_id_val,axis=-1,keepdims=True)
-    feature_ood = feature_ood/np.linalg.norm(feature_ood,axis=-1,keepdims=True)
-    feature_id_train = feature_id_train/np.linalg.norm(feature_id_train,axis=-1,keepdims=True)
-
-    # estimate mean and covariance 
-    train_means = []
-    train_feat_centered = []
-    for i in tqdm(range(1000)):
-        fs = feature_id_train[train_labels == i]
-        _m = fs.mean(axis=0)
-        train_means.append(_m)
-        train_feat_centered.extend(fs - _m)
-    ec = EmpiricalCovariance(assume_centered=True)
-    ec.fit(np.array(train_feat_centered).astype(np.float64))
-    mean = np.array(train_means)
-    prec = (ec.precision_)
-    mean = torch.from_numpy(mean).cuda().double()
-    prec = torch.from_numpy(prec).cuda().double()
-
-    # compute Scores
-    score_id = -np.array([(((f - mean) @ prec) * (f - mean)).sum(axis=-1).min().cpu().item() for f in
-                              tqdm(torch.from_numpy(feature_id_val).cuda().double())])
-    score_ood = -np.array([(((f - mean) @ prec) * (f - mean)).sum(axis=-1).min().cpu().item() for f in
-                           tqdm(torch.from_numpy(feature_ood).cuda().double())])
-    return score_id, score_ood
 ```
 
-## Run evaluation
-Evaluate an ImageNet SwinV2-base model with Mahalanobis++ on NINCO by running the following command from the `NINCO` folder: 
-````
-python3 evaluate.py --model_name swinv2_base_window12to24_192to384.ms_in22k_ft_in1k --method all --dataset NINCO --batch_size 128
-````
-Note that this takes considerable time since on a model's first run it requires a forward pass over the whole ImageNet-1K train set to extract the train features. Specifying `--method all` evaluates all methods. For the other OpenOOD datasets, you can specify `--dataset openood-datasets --dataset_paths_prefix ./OpenOOD/data/`. 
+Then edit `NINCO/data/paths_config.py` to set:
+- `ninco_folder`: path to the extracted NINCO datasets (containing `NINCO_OOD_classes`, `NINCO_OOD_unit_tests`, `NINCO_popular_datasets_subsamples`)
+- `repo_path`: absolute path to this repository
+- ImageNet path
 
-The CIFAR models (currently only the ResNet models) can be evaluated directly via the OpenOOD benchmark (run from `OpenOOD` folder):
-````
+## Running ANCO and ANG
+
+### ImageNet (NINCO / OpenOOD datasets)
+
+Run:
+
+```bash
+# On OpenOOD datasets (NINCO, SSB-hard, Texture, OpenImages-O, iNaturalist)
+python evaluate.py --model_name eva02_large_patch14_448.mim_m38m_ft_in1k --method anco --dataset openood-datasets --dataset_paths_prefix ./OpenOOD/data/
+
+# ANG (ANCO applied to NNGuide)
+python evaluate.py --model_name eva02_large_patch14_448.mim_m38m_ft_in1k --method ancoguide --dataset openood-datasets --dataset_paths_prefix ./OpenOOD/data/
+```
+
+> Note: The first run requires a full forward pass over ImageNet-1K train set to extract features. Extracted features are cached for subsequent runs.
+
+### CIFAR-100
+
+Run from the `OpenOOD` folder:
+
+```bash
 python eval_cifar.py
-````
-## ImageNet Results
+```
 
+## Results
 
-Normalizing the features improves Mahalanobis-based OOD detection consistently, and Mahalanobis with normalized features leads to the best methods on average, and also for most models individually. Shown are FPR values on NINCO.
-![NINCO-big-table.png](assets/NINCO-big-table.png)
+### ImageNet-1K (EVA02-L14, avg FPR ↓ across 5 OOD datasets)
+
+| Method | Avg FPR ↓ | Avg AUC ↑ |
+|--------|-----------|-----------|
+| Cosine | 20.6 | 95.4 |
+| NNGuide | 25.9 | 91.4 |
+| Mahalanobis++ | 17.7 | 96.0 |
+| **ANCO (ours)** | **17.3** | **96.0** |
+| **ANG (ours)** | **15.9** | **96.2** |
+
+### CIFAR-100 (avg FPR ↓ across 4 ResNet backbones)
+
+| Method | Avg FPR ↓ |
+|--------|-----------|
+| Cosine | 69.88 |
+| NNGuide | 72.42 |
+| Mahalanobis++ | 69.72 |
+| **ANCO (ours)** | **67.35** |
+| **ANG (ours)** | **66.35** |
 
 ## Citation
-For citing our paper, we would appreciate using the following bibtex entry (this will be updated once the ICML 2025 proceedings are public):
-```
-@inproceedings{
-mueller2025mahalanobispp,
-title={Mahalanobis++: Improving OOD Detection via Feature Normalization},
-author={Maximilian Mueller and Matthias Hein},
-booktitle={ICML},
-year={2025},
-url={https://arxiv.org/abs/2505.18032}
-}
-```
-Since this repo is based on the NINCO repo and the OpenOOD repo, please consider citing their work, too:
 
-```
-@inproceedings{
-bitterwolf2023ninco,
-title={In or Out? Fixing ImageNet Out-of-Distribution Detection Evaluation},
-author={Julian Bitterwolf and Maximilian Mueller and Matthias Hein},
-booktitle={ICML},
-year={2023},
-url={https://proceedings.mlr.press/v202/bitterwolf23a.html}
+If you use this code, please also cite the repositories this work builds upon:
+
+```bibtex
+@inproceedings{mueller2025mahalanobispp,
+  title={Mahalanobis++: Improving OOD Detection via Feature Normalization},
+  author={Maximilian Mueller and Matthias Hein},
+  booktitle={ICML},
+  year={2025},
+  url={https://arxiv.org/abs/2505.18032}
+}
+
+@inproceedings{bitterwolf2023ninco,
+  title={In or Out? Fixing ImageNet Out-of-Distribution Detection Evaluation},
+  author={Julian Bitterwolf and Maximilian Mueller and Matthias Hein},
+  booktitle={ICML},
+  year={2023},
+  url={https://proceedings.mlr.press/v202/bitterwolf23a.html}
 }
 
 @article{zhang2023openood,
   title={OpenOOD v1.5: Enhanced Benchmark for Out-of-Distribution Detection},
   author={Zhang, Jingyang and Yang, Jingkang and Wang, Pengyun and Wang, Haoqi and Lin, Yueqian and Zhang, Haoran and Sun, Yiyou and Du, Xuefeng and Li, Yixuan and Liu, Ziwei and Chen, Yiran and Li, Hai},
   journal={arXiv preprint arXiv:2306.09301},
+  year={2023}
+}
+
+@inproceedings{park2023nearest,
+  title={Nearest Neighbor Guidance for Out-of-Distribution Detection},
+  author={Park, Jaewoo and Jung, Dong Gyu and Kim, Hwanjun and Han, Sanghyuk},
+  booktitle={ICCV},
   year={2023}
 }
 ```

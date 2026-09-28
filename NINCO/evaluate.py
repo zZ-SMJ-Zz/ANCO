@@ -4,17 +4,21 @@ import argparse
 import datetime
 import timm
 import torchvision.datasets as dset
+import json
 from scipy.special import softmax
 from torch.utils.data.dataset import Dataset
 from timm.data import resolve_data_config
 from timm.data.transforms_factory import create_transform
-from utils import extract_features, extract_clip_embeddings, timm_models, fpr_at_tpr, auroc_ood, set_seed
+from utils import extract_features, extract_clip_embeddings, timm_models_f, fpr_at_tpr, auroc_ood, set_seed
 import utils
 from resnet50 import ResNetNNGUIDE, ResNetSupCon
 import data.paths_config
 from detection_methods import *
 import datasets
 import pandas as pd
+from concurrent.futures import ThreadPoolExecutor
+
+
 
 os.umask(0)  # all created files and directories have full 777 permissions
 
@@ -25,22 +29,17 @@ class OODScore:
         self.path_to_cache = path_to_cache
         self.path_to_imagenet = path_to_imagenet
         self.clip_quantile = 0.99
-        self.methods = ['MSP', 'MaxLogit', 'ViM', 'Mahalanobis', 'Energy+React',
-                        'Energy', 'KL-Matching', 'knn', 'Relative_Mahalanobis', 'mcm', 'cosine', 
-    'Mahalanobis_norm',
-    'ash_s',
-    'ash_b',
-    'scale',
-    'ssc',
-    'nnguide',
-    'nnguide10',
-    'Relative_Mahalanobis_norm',
-    'neco_l',
-    # 'gmm',
-    'nan',
-    'fdbd',
-    'gen',
-    ]
+        # self.methods = ['MSP', 'Energy', 'Energy+React', 'MaxLogit', 'ViM', 'ash_s', 'knn', 'nnguide', 'neco_l', 
+        #                 'gmm', 'gen', 'fdbd', 'ora', 'Mahalanobis', 'Mahalanobis_norm', 'Relative_Mahalanobis', 'Relative_Mahalanobis_norm', 'cosine', 
+    # 'mcm', 
+    # 'KL-Matching',
+    # 'ash_b',
+    # 'scale',
+    # 'ssc',
+    # 'nnguide10',
+    # 'nan',
+    # ]
+        self.methods = ['cosine', 'anco', 'ora']
         self.clip_transform = None
         self.val_acc = -99
         self.train_acc = -99
@@ -72,18 +71,37 @@ class OODScore:
         else:
             self.dataset_out = available_OOD_datasets[dataset](transform=test_transform)
 
+    
+    
     @staticmethod
     def check_complete(path, expected_samples, sources=['features', 'labels_true', 'logits']):
         predictions = {}
+        if not os.path.exists(path):
+            return False
+        all_files = os.listdir(path)
+
+        def load_file(file_path):
+            return np.load(file_path, mmap_mode='r')
+        
         if os.path.exists(path):
             for source in sources:
-                print('checking ', source)
-                names = sorted([f for f in os.listdir(path) if f.startswith(source + '_') and f.endswith('.npy')
-                                and f[len(source + '_'):-len('.npy')].isdigit()])
-                if len(names) == 0:
-                    print('No samples in {}'.format(path))
+                print(f'Checking {source} 병렬 로딩 중...')
+                prefix = source + '_'
+                names = sorted([f for f in all_files if f.startswith(prefix) and f.endswith('.npy')
+                                and f[len(prefix):-len('.npy')].isdigit()])
+                
+                if not names:
+                    print(f'No samples in {path}')
                     return False
-                predictions[source] = np.concatenate([np.load(os.path.join(path, f)) for f in names])
+                
+                file_paths = [os.path.join(path, f) for f in names]
+
+            
+                with ThreadPoolExecutor() as executor:
+                    loaded_parts = list(executor.map(load_file, file_paths))
+                # --------------------------
+
+                predictions[source] = np.concatenate(loaded_parts)
                 print('# samples: ',len(predictions[source]))
                 if source == 'text_encoded' and len(predictions[source]) == 1000:
                     continue
@@ -94,7 +112,7 @@ class OODScore:
                         return False
         return predictions
 
-    def get_features_and_logits(self, model, train=True, val=True, ood=True, overwrite='no'):
+    def get_features_and_logits(self, model, train=True, val=True, ood=True, far=True, overwrite='no'):
         if train:
             save_path_train = os.path.join(os.path.join(self.path_to_cache, 'cache_train', model.model_name))
             if overwrite in {'no', 'ood', 'notrain'}:
@@ -149,7 +167,6 @@ class OODScore:
             print('Computing softmax...')
             self.softmax_ood = softmax(self.logits_ood, axis=-1)
             print('Done')
-
     def get_features_clip(self, model, train=False, val=True, ood=True, overwrite='no',openclip=False):
         if train:
             save_path_train = os.path.join(os.path.join(self.path_to_cache, 'cache_train', model.model_name))
@@ -217,7 +234,7 @@ class OODScore:
         path = os.path.join(self.path_to_cache, 'cache_methods', model.model_name)
         if not os.path.exists(path):
             os.makedirs(path)
-        if any(m in methods for m in {'ViM', 'Energy+React','ash_b','ash_s','scale', 'ssc', 'ViM_norm', 'fdbd'}):
+        if any(m in methods for m in {'ViM', 'Energy+React','ash_b','ash_s','scale', 'ssc', 'ViM_norm', 'fdbd', 'ora'}):
             print('Reading w and b')
             if 'maxvit' in model.model_name or 'convnext' in model.model_name or 'tiny_vit' in model.model_name or 'regnety' in model.model_name or 'edgenext' in model.model_name or 'tresnet_v2' in model.model_name or 'swinv2' in model.model_name:
                 w = model.head.fc.weight.cpu().clone().detach().numpy()
@@ -262,7 +279,9 @@ class OODScore:
                                                      logits_id_val=self.logits_id_val,
                                                      logits_ood=self.logits_ood, u=u, path=path)
             elif method == 'fdbd':
-                scores_id, scores_ood = evaluate_fdbd(features_train=self.feature_id_train, features_val=self.feature_id_val, features_ninco=self.feature_ood,logits_val=self.logits_id_val,logits_ninco=self.logits_ood,w=w) 
+                scores_id, scores_ood = evaluate_fdbd(features_train=self.feature_id_train, features_val=self.feature_id_val, features_ninco=self.feature_ood,logits_val=self.logits_id_val,logits_ninco=self.logits_ood,w=w)
+            elif method == 'ora':
+                scores_id, scores_ood = evaluate_ora(features_train=self.feature_id_train, features_val=self.feature_id_val, features_ninco=self.feature_ood,logits_val=self.logits_id_val,logits_ninco=self.logits_ood,w=w)
             elif method == 'gen':
                 scores_id, scores_ood = evaluate_gen(self.softmax_id_val, self.softmax_ood, gamma=0.1, M=100)                 
             elif method == 'Mahalanobis':
@@ -275,13 +294,31 @@ class OODScore:
                                                              feature_id_val=self.feature_id_val,
                                                              feature_ood=self.feature_ood,
                                                              train_labels=self.train_labels, path=path)
+            
+            elif method == 'ancoguide':
+                scores_id, scores_ood = evaluate_ANCOGuide(
+                            feature_id_train=self.feature_id_train,
+                            feature_id_val=self.feature_id_val,
+                            feature_ood=self.feature_ood,
+                            train_labels=self.train_labels,
+                            path=path,
+                            num_classes=1000,
+                            K=50,
+                        )
+
             elif method == 'Relative_Mahalanobis':
                 scores_id, scores_ood = evaluate_Relative_Mahalanobis(feature_id_train=self.feature_id_train,
                                                                       feature_id_val=self.feature_id_val,
                                                                       feature_ood=self.feature_ood,
                                                                       train_labels=self.train_labels, path=path)
+            
             elif method=='Relative_Mahalanobis_norm':
                 scores_id, scores_ood = evaluate_Relative_Mahalanobis_norm(feature_id_train=self.feature_id_train,
+                                                                      feature_id_val=self.feature_id_val,
+                                                                      feature_ood=self.feature_ood,
+                                                                      train_labels=self.train_labels, path=path)
+            elif method=='anco':
+                scores_id, scores_ood = evaluate_ANCO(feature_id_train=self.feature_id_train,
                                                                       feature_id_val=self.feature_id_val,
                                                                       feature_ood=self.feature_ood,
                                                                       train_labels=self.train_labels, path=path)
@@ -352,8 +389,8 @@ class OODScore:
                 np.array([methods_results[method][c]['fpr_at_95'] for c in OOD_classes]))
 
             print('{} on {} evaluated with {}.\nAuroc: {}\nfpr at 95: {}\naccuracy val: {}\n accuracy train: {}'.format(
-            method, self.dataset, model.model_name, methods_results[method]['ood_classes_mean_auroc'],
-            methods_results[method]['ood_classes_mean_fpr_at_95'], self.val_acc, self.train_acc))
+            method, self.dataset, model.model_name, methods_results[method]['samples_mean_auroc'],
+            methods_results[method]['samples_mean_fpr_at_95'], self.val_acc, self.train_acc))
         # save results
         savepath = os.path.join(self.path_to_cache, 'scores', model.model_name, self.dataset_out.__name__)
         if not os.path.exists(savepath):
@@ -363,6 +400,42 @@ class OODScore:
                  id_labels=self.labels_id_val, ood_labels=self.labels_ood, ood_classes=OOD_classes,
                  val_acc=self.val_acc, train_acc=self.train_acc)
 
+        # save results
+        savepath = os.path.join(self.path_to_cache, 'scores', model.model_name, self.dataset_out.__name__)
+        if not os.path.exists(savepath):
+            os.makedirs(savepath)
+        eval_time = datetime.datetime.now().strftime('%Y-%m-%d-%H-%M-%S')
+
+        np.savez(os.path.join(savepath, f'E{eval_time}.npz'), methods_results=methods_results,
+                 id_labels=self.labels_id_val, ood_labels=self.labels_ood, ood_classes=OOD_classes,
+                 val_acc=self.val_acc, train_acc=self.train_acc)
+
+        def convert_to_serializable(obj):
+            if isinstance(obj, np.ndarray):
+                return obj.tolist()
+            if isinstance(obj, (np.float32, np.float64)):
+                return float(obj)
+            if isinstance(obj, (np.int32, np.int64)):
+                return int(obj)
+            if isinstance(obj, dict):
+                return {k: convert_to_serializable(v) for k, v in obj.items()}
+            if isinstance(obj, list):
+                return [convert_to_serializable(i) for i in obj]
+            return obj
+
+        json_data = {
+            'methods_results': convert_to_serializable(methods_results),
+            'val_acc': float(self.val_acc),
+            'train_acc': float(self.train_acc),
+            'eval_time': eval_time,
+            'model_name': model.model_name,
+            'dataset_out': self.dataset_out.__name__
+        }
+
+        with open(os.path.join(savepath, f'E{eval_time}.json'), 'w', encoding='utf-8') as f:
+            json.dump(json_data, f, indent=4, ensure_ascii=False)
+
+        print(f"Results saved to {os.path.join(savepath, f'E{eval_time}.json')}")
 
 methods_train_usage = {
     'MSP': False,
@@ -380,18 +453,20 @@ methods_train_usage = {
     'cosine-clip': False,
     'mcm-clip':False,
     'Mahalanobis_norm': True,
-    'Relative_Mahalanobis_norm':True,
+    'anco': True,
     'ash_s':False,
     'ash_b':False,
     'scale':False,
-    'ssc':False,
+    'ssc':True,
     'nnguide':True,
+    'ancoguide':True,
     'nnguide10':True,
     'neco_l':True,
     'gmm':True,
     'nan':True,
     'nan_pos':True,
     'fdbd':True,
+    'ora':True,
     'gen':False,
 }
 
@@ -416,35 +491,41 @@ def main():
     methods = task.methods if args.method == 'all' else [args.method]
     need_train_outputs = any([methods_train_usage[m] for m in methods])  # raises KeyError if a method is not available
     if args.model_name=='all':
-        model_names=list(timm_models.keys())
+        model_names=list(timm_models_f.keys())
     else:
         model_names = [args.model_name]
     ood_datasets=['./data/ssb_hard.csv', './data/places365.csv', './data/texture.csv', './data/openimages_o.csv', './data/inaturalist.csv'] if args.dataset=='openood-datasets' else [args.dataset]
     ood_datasets=['NINCO', 'NINCO_OOD_unit_tests', 'NINCO_popular_datasets_subsamples'] if args.dataset=='ninco-datasets' else ood_datasets
-    for ood_dataset_name in ood_datasets:
-        current_dataset=ood_dataset_name
-        for model_name in model_names:
-            if model_name in timm_models.keys():
-                model = timm.create_model(**timm_models[model_name]['config']).cuda().eval()
+    ood_datasets=['NINCO', './data/ssb_hard.csv', './data/texture.csv', './data/openimages_o.csv', './data/inaturalist.csv'] if args.dataset=='openood-datasets' else ood_datasets
+    for model_name in model_names:
+        for ood_dataset_name in ood_datasets:
+            current_dataset=ood_dataset_name 
+            if model_name in timm_models_f.keys():
+                model = timm.create_model(**timm_models_f[model_name]['config']).cuda(1).eval()
+    
                 model.model_name = model_name
                 model.batch_size = args.batch_size
                 model.project_features = False
                 print('Created model {}.'.format(model.model_name))
-                task.setup(current_dataset, model, ood_dataset_paths_prefix=args.dataset_paths_prefix, clip_model=False)
+                if current_dataset == 'NINCO':
+                    task.setup(current_dataset, model, ood_dataset_paths_prefix=None, clip_model=False)
+                else:
+                    task.setup(current_dataset, model, ood_dataset_paths_prefix=args.dataset_paths_prefix, clip_model=False)
                 print('Task is set up.')
-                task.get_features_and_logits(model, ood=True, train=need_train_outputs,
+                task.get_features_and_logits(model, ood=True, train=need_train_outputs, val=True, 
                                             overwrite=args.overwrite_model_outputs)
                 OOD_classes = task.dataset_out.classes
                 task.evaluate(model, OOD_classes=OOD_classes, methods=methods)
                 print(f'# ood classes: {len(OOD_classes)}')
+
             elif model_name=='rn50supcon':
                 model = ResNetSupCon()
                 # sd = torch.load('/mnt/qb/hein/mmueller67/vkd/resnet50-supcon.pt')
                 print('Loading SD')
-                sd = torch.load('/mnt/qb/hein/mmueller67/vkd/resnet50-supcon.pt')
+                sd = torch.load('/data/alswo5131/maha-norm/resnet50-supcon.pt')
                 print('Loaded SD')
                 model.load_state_dict(sd['model_state_dict'])
-                model = model.cuda().eval()
+                model = model.cuda(1).eval()
                 model.model_name = model_name
                 model.batch_size = args.batch_size
                 model.project_features = False

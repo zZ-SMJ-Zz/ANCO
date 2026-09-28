@@ -16,7 +16,9 @@ import pickle
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 from numpy import linalg as LA
-import copy 
+from torch.distributions import Normal
+import os
+
 
 def get_cholesky(mat, epsilon=1e-10, max_attempts=10):
     attempts = 0
@@ -197,6 +199,65 @@ def evaluate_gen(sf_id, sf_ood, gamma=0.1, M=100):
     score_ood = generalized_entropy(sf_ood, gamma=gamma, M=M)
 
     return score_id,score_ood
+
+def evaluate_ora(features_train, features_val, features_ninco, logits_val, logits_ninco, w):
+    device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
+
+    feat_train = torch.from_numpy(features_train).to(device)
+    feat_val = torch.from_numpy(features_val).to(device)
+    feat_ninco = torch.from_numpy(features_ninco).to(device)
+    
+    score_val = torch.from_numpy(logits_val).to(device)
+    score_ninco = torch.from_numpy(logits_ninco).to(device)
+    
+    w_torch = torch.from_numpy(w).to(device) # [num_classes, feat_dim]
+    num_classes = w_torch.shape[0]
+    
+    train_mean = torch.mean(feat_train, dim=0)
+
+    def calculate_ora_logic(features, logits):
+        batch_size = features.shape[0]
+        max_logits, preds = logits.max(dim=1)
+        
+        trajectory_list = torch.zeros((batch_size, num_classes), device=device)
+        
+        centered_feats = features - train_mean
+        
+        for class_id in range(num_classes):
+            # weight_diff: w[pred] - w[class_id]
+            weight_diff = w_torch[preds] - w_torch[class_id]
+            weight_diff_norm_sq = torch.norm(weight_diff, dim=1)**2
+            
+            weight_diff_norm_sq[weight_diff_norm_sq == 0] = 1e-12
+            
+            # logit_diff = max_logit - logit[class_id]
+            logit_diff = max_logits - logits[:, class_id]
+            
+            # feat_db = feat - (logit_diff / ||w_diff||^2) * w_diff
+            multiplier = (logit_diff / weight_diff_norm_sq).view(-1, 1)
+            feats_db = features - (multiplier * weight_diff)
+            
+            centered_feats_db = feats_db - train_mean
+            
+            norm_origin = F.normalize(centered_feats, p=2, dim=1)
+            norm_db = F.normalize(centered_feats_db, p=2, dim=1)
+            
+            cos_sim = torch.sum(norm_origin * norm_db, dim=1)
+            cos_sim = torch.clamp(cos_sim, -1.0 + 1e-7, 1.0 - 1e-7)
+            
+            angles = torch.acos(cos_sim) / torch.pi
+            trajectory_list[:, class_id] = angles
+
+        trajectory_list = torch.nan_to_num(trajectory_list, nan=0.0)
+        final_scores = torch.max(trajectory_list, dim=1).values
+        return final_scores.cpu().numpy()
+    
+    score_in = calculate_ora_logic(feat_val, score_val)
+
+    score_out = calculate_ora_logic(feat_ninco, score_ninco)
+
+    return score_in, score_out
+
 
 def evaluate_fdbd(features_train, features_val, features_ninco,logits_val,logits_ninco,w,):
     device='cuda:0'
@@ -419,6 +480,143 @@ def evaluate_neco(feature_id_train, feature_id_val, feature_ood, logit_id_val, l
     return score_id, score_ood
 
 
+import numpy as np
+import torch
+import os
+from tqdm import tqdm
+from sklearn.covariance import LedoitWolf
+
+def evaluate_ANCO(feature_id_train, feature_id_val, feature_ood, train_labels, path, num_classes=1000):
+    def safe_l2_norm(x, axis=-1, eps=1e-12):
+        norm = np.linalg.norm(x, axis=axis, keepdims=True)
+        return x / (norm + eps)
+    def spherical_mean(xs, max_iter=100, tol=1e-7):
+        # xs: [N, D], normalized vectors
+        mu = xs.mean(axis=0)
+        mu /= np.linalg.norm(mu)
+
+        for _ in range(max_iter):
+            cos_t = np.clip(xs @ mu, -1+1e-9, 1-1e-9)
+            theta = np.arccos(cos_t)
+            sin_t = np.sqrt(1-cos_t**2).clip(1e-9)
+
+            # log map: v_i = θ_i * u_i
+            u = (xs - cos_t[:,None]*mu[None,:]) / sin_t[:,None]
+            v = (theta[:,None]*u)
+            v_mean = v.mean(axis=0)
+
+            # convergence check
+            if np.linalg.norm(v_mean) < tol:
+                break
+
+            # exp map: mu_new = exp_mu(v_mean)
+            alpha = np.linalg.norm(v_mean)
+            mu_new = np.cos(alpha)*mu + np.sin(alpha)*(v_mean/alpha)
+            mu = mu_new / np.linalg.norm(mu)
+
+        return mu
+
+
+    feature_id_train = safe_l2_norm(feature_id_train)
+    D = feature_id_train.shape[1]
+    
+    mean_path = os.path.join(path, 'mean_angular_m.npy')
+    cov_path  = os.path.join(path, 'cov_angular_m.npy')
+
+    if os.path.exists(mean_path) and os.path.exists(cov_path):
+        mean = np.load(mean_path)
+        cov  = np.load(cov_path)
+    else:
+        print('Learning Angular Covariance of Class Means...')
+        class_means = []
+
+        for i in tqdm(range(num_classes)):
+            fs = feature_id_train[train_labels == i]
+            if fs.shape[0] < 1:
+                class_means.append(np.zeros(D))
+                continue
+            
+            mu_c = spherical_mean(fs)
+            class_means.append(mu_c)
+        
+        class_means = np.array(class_means) # [C, D]
+        
+        global_mean = spherical_mean(class_means)
+        
+        cos_t = np.clip(class_means @ global_mean, -1.0 + 1e-7, 1.0 - 1e-7)
+        theta = np.arccos(cos_t)
+        sin_t = np.sqrt(1.0 - cos_t**2).clip(1e-7)
+
+        u_tangent = (class_means - cos_t[:, None] * global_mean[None, :]) / sin_t[:, None]
+        v_centers = theta[:, None] * u_tangent # [C, D]
+
+        cov = np.cov(v_centers, rowvar=False)
+        mean = class_means 
+
+        np.save(mean_path, mean)
+        np.save(cov_path,  cov)
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    mean_t = torch.from_numpy(mean).to(device).double()
+    cov_t  = torch.from_numpy(cov).to(device).double()
+    avg_sigma = torch.sqrt(torch.trace(cov_t) / D)
+    @torch.no_grad()
+    def compute_scores(X, chunk_size=1024):
+        X = torch.from_numpy(safe_l2_norm(X)).to(device).double()
+        N = X.size(0)
+        C = mean_t.size(0)
+        eps = 1e-12
+        scores = []
+
+        for start in range(0, N, chunk_size):
+            end = min(start + chunk_size, N)
+            x = X[start:end]  # [B, D]
+
+            sims_per_class = []
+            for c in range(C):
+                mu_c = mean_t[c]  # [D]
+
+
+                cos_t = (x @ mu_c).clamp(-1.0 + 1e-7, 1.0 - 1e-7)  # [B]
+                theta = torch.acos(cos_t)                           # [B]
+                sin_t = torch.sqrt(1.0 - cos_t.pow(2)).clamp_min(1e-7)
+
+                u = (x - cos_t.unsqueeze(1) * mu_c.unsqueeze(0)) / sin_t.unsqueeze(1)  # [B, D]
+
+
+                var_u = torch.sum((u @ cov_t) * u, dim=1)          # [B]
+                var_u = var_u.clamp_min(eps)
+                sigma_u = torch.sqrt(var_u)                        # [B]
+
+                theta_adj = theta * (avg_sigma / sigma_u)                   # [B]
+                PI = torch.acos(torch.tensor(-1.0)).to(device)
+                theta_adj = torch.clamp(theta_adj, max=PI)
+
+                sim_c = torch.cos(theta_adj)                       # [B]
+                # sims_per_class.append(sim_c)
+                sims_per_class.append(-theta_adj)
+
+
+            all_sims = torch.stack(sims_per_class, dim=1)  # [B, C]
+
+
+            score_batch, _ = torch.max(all_sims, dim=1)    # [B]
+            scores.append(score_batch)
+
+        return torch.cat(scores).cpu().numpy()
+
+    print('Computing Directional Angular Cosine Scores...')
+    score_id  = compute_scores(feature_id_val)
+    score_ood = compute_scores(feature_ood)
+
+    return score_id, score_ood
+
+
+
+
+
+
+
 def evaluate_Mahalanobis_norm(feature_id_train, feature_id_val, feature_ood, train_labels, path):
     """
     This function computes Mahalanobis scores for in-distribution and out-of-distribution samples.
@@ -483,6 +681,7 @@ def evaluate_Mahalanobis_norm(feature_id_train, feature_id_val, feature_ood, tra
     score_ood = -np.array([(((f - mean) @ prec) * (f - mean)).sum(axis=-1).min().cpu().item() for f in
                            tqdm(torch.from_numpy(feature_ood).cuda().double())])
     return score_id, score_ood
+
 
 def evaluate_Mahalanobis(feature_id_train, feature_id_val, feature_ood, train_labels, path):
     """
@@ -660,6 +859,7 @@ def evaluate_Relative_Mahalanobis_norm(feature_id_train, feature_id_val, feature
         [((((f - mean_global) @ prec_global) * (f - mean_global)).sum(axis=-1)).item() for f in tqdm(feature_ood)])
     score_ood = score_ood_classwise - score_ood_global
     return score_id, score_ood
+
 
 def evaluate_Relative_Mahalanobis(feature_id_train, feature_id_val, feature_ood, train_labels, path):
     """
@@ -946,6 +1146,162 @@ def evaluate_nnguide(feature_id_train, feature_id_val, feature_ood, logits_id_tr
     score_ood = conf_ood * energy_ood
 
     return score_id, score_ood    
+
+
+def evaluate_ANCOGuide(
+    feature_id_train,
+    feature_id_val,
+    feature_ood,
+    train_labels,
+    path,
+    num_classes=1000,
+    K=50,
+):
+    """
+    COCOGuide with class-center bank:
+      - bank = class centers (one per class)
+      - retrieve top-K class centers by COCO similarity
+      - final score = COCO base score * class-bank guidance
+    """
+
+    def safe_l2_norm(x, axis=-1, eps=1e-12):
+        norm = np.linalg.norm(x, axis=axis, keepdims=True)
+        return x / (norm + eps)
+
+    def spherical_mean(xs, max_iter=100, tol=1e-7):
+        mu = xs.mean(axis=0)
+        mu /= (np.linalg.norm(mu) + 1e-12)
+
+        for _ in range(max_iter):
+            cos_t = np.clip(xs @ mu, -1 + 1e-9, 1 - 1e-9)
+            theta = np.arccos(cos_t)
+            sin_t = np.sqrt(1 - cos_t**2).clip(1e-9)
+
+            u = (xs - cos_t[:, None] * mu[None, :]) / sin_t[:, None]
+            v = theta[:, None] * u
+            v_mean = v.mean(axis=0)
+
+            if np.linalg.norm(v_mean) < tol:
+                break
+
+            alpha_ = np.linalg.norm(v_mean)
+            mu_new = np.cos(alpha_) * mu + np.sin(alpha_) * (v_mean / (alpha_ + 1e-12))
+            mu = mu_new / (np.linalg.norm(mu_new) + 1e-12)
+
+        return mu
+
+    # -------------------------------------------------------
+    # 1) learn/load class means + global covariance
+    # -------------------------------------------------------
+    feature_id_train = safe_l2_norm(feature_id_train)
+    D = feature_id_train.shape[1]
+
+    mean_path = os.path.join(path, "mean_cocoguide.npy")
+    cov_path = os.path.join(path, "cov_cocoguide.npy")
+
+    if os.path.exists(mean_path) and os.path.exists(cov_path):
+        class_means = np.load(mean_path)
+        cov = np.load(cov_path)
+    else:
+        print("Learning class-center bank for COCOGuide...")
+        cms = []
+        for i in tqdm(range(num_classes)):
+            fs = feature_id_train[train_labels == i]
+            if fs.shape[0] < 1:
+                cms.append(np.zeros(D, dtype=np.float64))
+                continue
+            cms.append(spherical_mean(fs))
+        class_means = np.array(cms)
+
+        valid_mask = np.linalg.norm(class_means, axis=1) > 0
+        valid_class_means = class_means[valid_mask]
+
+        global_mean = spherical_mean(valid_class_means)
+
+        cos_t = np.clip(class_means @ global_mean, -1.0 + 1e-7, 1.0 - 1e-7)
+        theta = np.arccos(cos_t)
+        sin_t = np.sqrt(1.0 - cos_t**2).clip(1e-7)
+
+        u_tangent = (class_means - cos_t[:, None] * global_mean[None, :]) / sin_t[:, None]
+        v_centers = theta[:, None] * u_tangent
+        cov = np.cov(v_centers[valid_mask], rowvar=False)
+
+        np.save(mean_path, class_means)
+        np.save(cov_path, cov)
+
+    # -------------------------------------------------------
+    # 2) torch setup
+    # -------------------------------------------------------
+    device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+    cov_t = torch.from_numpy(cov).to(device).double()
+    avg_sigma = torch.sqrt(torch.trace(cov_t) / D)
+    class_means_t = torch.from_numpy(class_means).to(device).double()
+
+    @torch.no_grad()
+    def compute_classwise_coco_scores(X, chunk_size=512):
+        X = torch.from_numpy(safe_l2_norm(X)).to(device).double()
+        eps = 1e-12
+        all_scores = []
+
+        for start in range(0, X.size(0), chunk_size):
+            x = X[start:start + chunk_size]
+            sims_per_class = []
+
+            for c in range(class_means_t.size(0)):
+                mu_c = class_means_t[c]
+                if torch.norm(mu_c) < eps:
+                    sims_per_class.append(
+                        torch.full((x.size(0),), -1e6, dtype=torch.double, device=device)
+                    )
+                    continue
+
+                cos_t = (x @ mu_c).clamp(-1.0 + 1e-7, 1.0 - 1e-7)
+                theta = torch.acos(cos_t)
+                sin_t = torch.sqrt(1.0 - cos_t.pow(2)).clamp_min(1e-7)
+
+                u = (x - cos_t.unsqueeze(1) * mu_c.unsqueeze(0)) / sin_t.unsqueeze(1)
+                var_u = torch.sum((u @ cov_t) * u, dim=1).clamp_min(eps)
+                sigma_u = torch.sqrt(var_u)
+
+                theta_adj = theta * (avg_sigma / sigma_u)
+                pi_val = torch.acos(torch.tensor(-1.0, device=device, dtype=torch.double))
+                theta_adj = torch.clamp(theta_adj, max=pi_val)
+
+                sim_c = torch.cos(theta_adj)
+                sims_per_class.append(sim_c)
+
+            all_sims = torch.stack(sims_per_class, dim=1)  # [B, C]
+            all_scores.append(all_sims)
+
+        return torch.cat(all_scores, dim=0)  # [N, C]
+
+    # -------------------------------------------------------
+    # 3) base score + class-bank guidance
+    # -------------------------------------------------------
+    print("Computing COCOGuide scores...")
+    all_id_scores = compute_classwise_coco_scores(feature_id_val)
+    all_ood_scores = compute_classwise_coco_scores(feature_ood)
+
+    # COCO base = max over classes
+    coco_id = torch.max(all_id_scores, dim=1).values.cpu().numpy()
+    coco_ood = torch.max(all_ood_scores, dim=1).values.cpu().numpy()
+
+    # Guidance = top-K class-center scores mean
+    k_eff = min(K, all_id_scores.shape[1])
+
+    guide_id = torch.topk(all_id_scores, k=k_eff, dim=1, largest=True, sorted=False).values.mean(dim=1).cpu().numpy()
+    guide_ood = torch.topk(all_ood_scores, k=k_eff, dim=1, largest=True, sorted=False).values.mean(dim=1).cpu().numpy()
+
+    # Final score
+    score_id = coco_id * guide_id
+    score_ood = coco_ood * guide_ood
+
+    np.save(os.path.join(path, "scores_id_cocoguide.npy"), score_id)
+    np.save(os.path.join(path, "scores_ood_cocoguide.npy"), score_ood)
+
+    return score_id, score_ood
+
+
 
 def evaluate_she(feature_id_train, feature_id_val, feature_ood, logits_id_train, logits_id_val, logits_ood, labels_train, path, metric='inner_product'):
         

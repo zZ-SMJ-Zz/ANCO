@@ -18,11 +18,13 @@ from openood.postprocessors import (
     T2FNormPostprocessor, ReweightOODPostprocessor, fDBDPostprocessor, 
     MDSNPostprocessor, RMDSNPostprocessor, 
     GMM_Postprocessor, NecoPostprocessor,
+    ANCOPostprocessor, CosPostprocessor, ANCOGuidePostprocessor
     )
 from openood.utils.config import Config, merge_configs
 
 postprocessors = {
     'fdbd': fDBDPostprocessor,
+    'cos':CosPostprocessor,
     'ash': ASHPostprocessor,
     'cider': CIDERPostprocessor,
     'conf_branch': ConfBranchPostprocessor,
@@ -71,6 +73,8 @@ postprocessors = {
     'rmdsn': RMDSNPostprocessor,
     'neco': NecoPostprocessor,
     'gmm_':GMM_Postprocessor,
+    'anco' : ANCOPostprocessor,
+    'ang' : ANCOGuidePostprocessor,
 }
 
 link_prefix = 'https://raw.githubusercontent.com/Jingkang50/OpenOOD/main/configs/postprocessors/'

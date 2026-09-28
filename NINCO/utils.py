@@ -13,6 +13,135 @@ import random
 from scipy.linalg import cholesky
 
 
+timm_models_f  = {
+    # ---------------------------------------------------------
+    # 1. Tiny (~5M - 6M)
+    # ---------------------------------------------------------
+    # 'vit_large_patch16_224.augreg_in21k_ft_in1k': {'config': {'model_name': 'vit_large_patch16_224.augreg_in21k_ft_in1k', 'pretrained': True, 'num_classes': 1000}},
+    # 'eva02_base_patch14_448.mim_in22k_ft_in22k_in1k': {'config': {'model_name': 'eva02_base_patch14_448.mim_in22k_ft_in22k_in1k', 'pretrained': True, 'num_classes': 1000}},    
+    # 'vit_base_patch16_224.augreg_in21k_ft_in1k': {'config': {'model_name': 'vit_base_patch16_224.augreg_in21k_ft_in1k', 'pretrained': True, 'num_classes': 1000}},
+    'deit3_base_patch16_384.fb_in22k_ft_in1k': {'config': {'model_name': 'deit3_base_patch16_384.fb_in22k_ft_in1k', 'pretrained': True, 'num_classes': 1000}},
+    'convnextv2_base.fcmae_ft_in22k_in1k_384': {'config': {'model_name': 'convnextv2_base.fcmae_ft_in22k_in1k_384', 'pretrained': True, 'num_classes': 1000}},
+    'deit3_base_patch16_384.fb_in1k': {'config': {'model_name': 'deit3_base_patch16_384.fb_in1k', 'pretrained': True, 'num_classes': 1000}},
+    'convnextv2_large.fcmae_ft_in1k': {'config': {'model_name': 'convnextv2_large.fcmae_ft_in1k', 'pretrained': True, 'num_classes': 1000}},
+    'deit3_large_patch16_384.fb_in22k_ft_in1k': {'config': {'model_name': 'deit3_large_patch16_384.fb_in22k_ft_in1k', 'pretrained': True, 'num_classes': 1000}},
+    'convnextv2_large.fcmae_ft_in22k_in1k_384': {'config': {'model_name': 'convnextv2_large.fcmae_ft_in22k_in1k_384', 'pretrained': True, 'num_classes': 1000}},
+    'eva02_large_patch14_448.mim_m38m_ft_in22k_in1k': {'config': {'model_name': 'eva02_large_patch14_448.mim_m38m_ft_in22k_in1k', 'pretrained': True, 'num_classes': 1000}},
+    'resnet152.tv2_in1k': {'config': {'model_name': 'resnet152.tv2_in1k', 'pretrained': True, 'num_classes': 1000}},
+    'resnet50.tv2_in1k': {'config': {'model_name': 'resnet50.tv2_in1k', 'pretrained': True, 'num_classes': 1000}},
+    'resnet101.tv2_in1k': {'config': {'model_name': 'resnet101.tv2_in1k', 'pretrained': True, 'num_classes': 1000}},
+    
+    'vit_tiny_patch16_224.augreg_in21k_ft_in1k': {'config': {'model_name': 'vit_tiny_patch16_224.augreg_in21k_ft_in1k', 'pretrained': True, 'num_classes': 1000}},
+    'eva02_tiny_patch14_336.mim_in22k_ft_in1k': {'config': {'model_name': 'eva02_tiny_patch14_336.mim_in22k_ft_in1k', 'pretrained': True}},
+    'eva02_large_patch14_448.mim_m38m_ft_in1k': {'config': {'model_name': 'eva02_large_patch14_448.mim_m38m_ft_in1k', 'pretrained': True, 'num_classes': 1000}},
+
+    # # ---------------------------------------------------------
+    # # 2. Small & Light (~22M - 28M)
+    # # ---------------------------------------------------------
+    # # EfficientNetV2-S (~22M)
+    'tf_efficientnetv2_s.in1k': {'config': {'model_name': 'tf_efficientnetv2_s.in1k', 'pretrained': True, 'num_classes': 1000}},
+    
+    # ViT Small (~22M)
+    'vit_small_patch16_224.augreg_in21k_ft_in1k': {'config': {'model_name': 'vit_small_patch16_224.augreg_in21k_ft_in1k', 'pretrained': True, 'num_classes': 1000}},
+    'vit_small_patch16_224.augreg_in1k': {'config': {'model_name': 'vit_small_patch16_224.augreg_in1k', 'pretrained': True, 'num_classes': 1000}},
+    # 'tf_efficientnetv2_l.in1k': {'config': {'model_name': 'tf_efficientnetv2_l.in1k', 'pretrained': True, 'num_classes': 1000}},
+    # 'swinv2_large_window12to24_192to384.ms_in22k_ft_in1k': {'config': {'model_name': 'swinv2_large_window12to24_192to384.ms_in22k_ft_in1k', 'pretrained': True, 'num_classes': 1000}},
+    # DeiT3 Small (~22M)
+    'deit3_small_patch16_384.fb_in22k_ft_in1k': {'config': {'model_name': 'deit3_small_patch16_384.fb_in22k_ft_in1k', 'pretrained': True, 'num_classes': 1000}},
+    'deit3_small_patch16_384.fb_in1k': {'config': {'model_name': 'deit3_small_patch16_384.fb_in1k', 'pretrained': True, 'num_classes': 1000}},
+    
+    # EVA02 Small (~22M)
+    'eva02_small_patch14_336.mim_in22k_ft_in1k': {'config': {'model_name': 'eva02_small_patch14_336.mim_in22k_ft_in1k', 'pretrained': True}},
+    
+    # ResNet50 (~25M)
+    
+    
+    # ConvNeXt V2 Tiny (~28M)
+    'convnextv2_tiny.fcmae_ft_in22k_in1k_384': {'config': {'model_name': 'convnextv2_tiny.fcmae_ft_in22k_in1k_384', 'pretrained': True, 'num_classes': 1000}},
+    'convnextv2_tiny.fcmae_ft_in1k': {'config': {'model_name': 'convnextv2_tiny.fcmae_ft_in1k', 'pretrained': True, 'num_classes': 1000}},
+
+    # ---------------------------------------------------------
+    # 3. Medium (~45M - 60M)
+    # ---------------------------------------------------------
+    # ResNet101 (~45M)
+    
+    # SwinV2 Small (~50M)
+    'swinv2_small_window16_256.ms_in1k': {'config': {'model_name': 'swinv2_small_window16_256.ms_in1k', 'pretrained': True, 'num_classes': 1000}},
+    
+    # EfficientNetV2-M (~54M)
+    'tf_efficientnetv2_m.in1k': {'config': {'model_name': 'tf_efficientnetv2_m.in1k', 'pretrained': True, 'num_classes': 1000}},
+    
+    # MLP-Mixer Base (~59M)
+    'mixer_b16_224.goog_in21k_ft_in1k': {'config': {'model_name': 'mixer_b16_224.goog_in21k_ft_in1k', 'pretrained': True, 'num_classes': 1000}},
+    
+    # ResNet152 (~60M)
+    
+    'vit_large_patch14_clip_336.laion2b_ft_in12k_in1k': {'config': {'model_name': 'vit_large_patch14_clip_336.laion2b_ft_in12k_in1k', 'pretrained': True, 'num_classes': 1000}},
+    # ---------------------------------------------------------
+    # 4. Base / Standard (~86M - 90M)
+    # ---------------------------------------------------------
+    # ViT Base (~86M)
+    
+    'vit_base_patch16_224.augreg_in1k': {'config': {'model_name': 'vit_base_patch16_224.augreg_in1k', 'pretrained': True, 'num_classes': 1000}},
+    'vit_base_patch16_224.orig_in21k_ft_in1k': {'config': {'model_name': 'vit_base_patch16_224.orig_in21k_ft_in1k', 'pretrained': True, 'num_classes': 1000}},
+    'vit_base_patch16_224_miil.in21k_ft_in1k': {'config': {'model_name': 'vit_base_patch16_224_miil.in21k_ft_in1k', 'pretrained': True, 'num_classes': 1000}},
+    'vit_base_patch16_224.augreg2_in21k_ft_in1k': {'config': {'model_name': 'vit_base_patch16_224.augreg2_in21k_ft_in1k', 'pretrained': True, 'num_classes': 1000}},
+    'vit_base_patch16_clip_224.laion2b_ft_in12k_in1k': {'config': {'model_name': 'vit_base_patch16_clip_224.laion2b_ft_in12k_in1k', 'pretrained': True, 'num_classes': 1000}},
+    
+    # DeiT3 Base (~86M)
+   
+    
+    
+    # EVA02 Base (~86M)
+    
+    
+    # SwinV2 Base (~88M)
+    'swinv2_base_window12to24_192to384.ms_in22k_ft_in1k': {'config': {'model_name': 'swinv2_base_window12to24_192to384.ms_in22k_ft_in1k', 'pretrained': True, 'num_classes': 1000}},
+    'swinv2_base_window16_256.ms_in1k': {'config': {'model_name': 'swinv2_base_window16_256.ms_in1k', 'pretrained': True, 'num_classes': 1000}},
+    
+    # ConvNeXt Base (~88M)
+    'convnext_base.fb_in1k': {'config': {'model_name': 'convnext_base.fb_in1k', 'pretrained': True, 'num_classes': 1000}},
+    'convnext_base.fb_in22k_ft_in1k': {'config': {'model_name': 'convnext_base.fb_in22k_ft_in1k', 'pretrained': True, 'num_classes': 1000}},
+    
+    'convnextv2_base.fcmae_ft_in1k': {'config': {'model_name': 'convnextv2_base.fcmae_ft_in1k', 'pretrained': True, 'num_classes': 1000}},
+
+    # ---------------------------------------------------------
+    # 5. Large (~120M - 200M)
+    # ---------------------------------------------------------
+    # EfficientNetV2-L (~120M)
+    
+    
+    # SwinV2 Large (~197M)
+    
+    
+    # ConvNeXt V2 Large (~198M)
+    
+   
+
+    # ---------------------------------------------------------
+    # 6. Very Large / Huge (300M+)
+    # ---------------------------------------------------------
+    # DeiT3 Large (~304M)
+    
+    'deit3_large_patch16_384.fb_in1k': {'config': {'model_name': 'deit3_large_patch16_384.fb_in1k', 'pretrained': True, 'num_classes': 1000}},
+    
+    # ViT Large (~304M)
+   
+    
+    'vit_large_patch32_384.orig_in21k_ft_in1k': {'config': {'model_name': 'vit_large_patch32_384.orig_in21k_ft_in1k', 'pretrained': True, 'num_classes': 1000}},
+    
+    # EVA02 Large (~304M)
+    
+    
+    # ViT So400M (~400M)
+    'vit_so400m_patch14_siglip_378.webli_ft_in1k': {'config': {'model_name': 'vit_so400m_patch14_siglip_378.webli_ft_in1k', 'pretrained': True, 'num_classes': 1000}},
+    
+    # ViT Huge (~632M)
+    'vit_huge_patch14_clip_336.laion2b_ft_in12k_in1k': {'config': {'model_name': 'vit_huge_patch14_clip_336.laion2b_ft_in12k_in1k', 'pretrained': True, 'num_classes': 1000}},
+}
+
+
+
 timm_models = {
 'vit_small_patch14_dinov2.ft_i1k_70eps':{'config':{'model_name':'vit_small_patch14_dinov2','checkpoint_path': '/mnt/qb/hein/mmueller67/vkd/timm-ft/20250328-084036-vit_small_patch14_dinov2-518/checkpoint-69.pth.tar','num_classes':1000}},    
 'vit_small_patch14_dinov2.ft_i1k_60eps':{'config':{'model_name':'vit_small_patch14_dinov2','checkpoint_path': '/mnt/qb/hein/mmueller67/vkd/timm-ft/20250328-084036-vit_small_patch14_dinov2-518/checkpoint-59-perm.pth.tar','num_classes':1000}},    
@@ -283,7 +412,7 @@ def extract_features(model, dataset, savepath, wo_head=False):
             slice_datasets[i] = torch.utils.data.Subset(dataset, index_slices[i])
             slice_datasets[i].__name__ = f'slice{index_slices[i].start}_to_{index_slices[i].stop}'
             slice_datasets[i].classes = dataset.classes
-            dataloader = torch.utils.data.DataLoader(slice_datasets[i], batch_size=model.batch_size)
+            dataloader = torch.utils.data.DataLoader(slice_datasets[i], batch_size=model.batch_size, num_workers=12, pin_memory=True)
 
             features = []
             logits_ = []
@@ -330,7 +459,6 @@ def extract_features(model, dataset, savepath, wo_head=False):
                         data)
 
 
-
 def extract_openclip_embeddings(model, dataset, savepath, text=None):
     print(savepath)
     print('Len dataset: ',len(dataset))
@@ -364,7 +492,7 @@ def extract_openclip_embeddings(model, dataset, savepath, text=None):
             slice_datasets[i] = torch.utils.data.Subset(dataset, index_slices[i])
             slice_datasets[i].__name__ = f'slice{index_slices[i].start}_to_{index_slices[i].stop}'
             slice_datasets[i].classes = dataset.classes
-            dataloader = torch.utils.data.DataLoader(slice_datasets[i], batch_size=model.batch_size)
+            dataloader = torch.utils.data.DataLoader(slice_datasets[i], batch_size=model.batch_size, num_workers=12, pin_memory=True)
 
             features = []
             labels_true = []
@@ -464,7 +592,7 @@ def extract_clip_embeddings(model, dataset, savepath, text=None, k=250):
     if not os.path.exists(savepath):
         os.makedirs(savepath)
 
-    dataloader = torch.utils.data.DataLoader(dataset, batch_size=model.batch_size)
+    dataloader = torch.utils.data.DataLoader(dataset, batch_size=model.batch_size, num_workers=12, pin_memory=True)
     features = []
     labels_true = []
     model.eval()
