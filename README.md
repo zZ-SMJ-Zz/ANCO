@@ -1,5 +1,8 @@
 # Out-of-Distribution Detection with Anisotropic Cosine Similarity
 
+[![Paper](https://img.shields.io/badge/Paper-CIKM%202026-blue)](https://dl.acm.org/doi/10.1145/3799682.3839845)
+
+Official code for **"Out-of-Distribution Detection with Anisotropic Cosine Similarity"** (Minjae Sung, Jonghun Park), CIKM 2026. [[Paper]](https://dl.acm.org/doi/10.1145/3799682.3839845)
 
 ## Overview
 
@@ -101,7 +104,22 @@ python eval_cifar.py
 
 ## Citation
 
-If you use this code, please also cite the repositories this work builds upon:
+If you find this work useful, please cite our paper:
+
+```bibtex
+@inproceedings{sung2026anco,
+  title={Out-of-Distribution Detection with Anisotropic Cosine Similarity},
+  author={Sung, Minjae and Park, Jonghun},
+  booktitle={Proceedings of the 35th ACM International Conference on Information and Knowledge Management (CIKM)},
+  pages={7858--7862},
+  year={2026},
+  publisher={ACM},
+  doi={10.1145/3799682.3839845},
+  url={https://dl.acm.org/doi/10.1145/3799682.3839845}
+}
+```
+
+Please also cite the repositories this work builds upon:
 
 ```bibtex
 @inproceedings{mueller2025mahalanobispp,
